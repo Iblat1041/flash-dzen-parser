@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 import xml.etree.ElementTree as ET
@@ -21,6 +22,29 @@ logging.basicConfig(
     handlers=[logging.FileHandler("logs/dzen_scraper.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """
+    Безопасно прочитать булеву переменную окружения.
+
+    Поддерживает: 1/0, true/false, yes/no, on/off (регистр не важен).
+
+    :param name: имя переменной окружения.
+    :param default: значение по умолчанию.
+    :return: True/False.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+
+    return default
 
 
 class DzenRSSNewsScraper:
@@ -44,9 +68,11 @@ class DzenRSSNewsScraper:
             "story_digest": '[data-testid="story-digest"]',
             "summarization_items": '[data-testid="summarization-item"]',
             "source_links": '[data-testid="source-link"]',
-            "story_tail_items": ".news-story-tail__list-items .news-site--card-text__cardLink-kh",
+            "story_tail_items": ".news-story-tail__list-items "
+            ".news-site--card-text__cardLink-kh",
             "article_body": '[data-testid="article-body"]',
-            "article_paragraphs": '[data-testid="article-render__block"] p, [data-testid="article-render__block"] span',
+            "article_paragraphs": '[data-testid="article-render__block"] p, '
+            '[data-testid="article-render__block"] span',
         }
 
     def init_database(self):
@@ -148,8 +174,12 @@ class DzenRSSNewsScraper:
     async def init_browser(self):
         """Инициализация браузера с настройками"""
         self.playwright = await async_playwright().start()
+
+        headless = _env_bool("HEADLESS", True)
+        logger.info("Playwright launch: headless=%s", headless)
+
         self.browser = await self.playwright.chromium.launch(
-            headless=False,
+            headless=headless,
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
@@ -165,14 +195,21 @@ class DzenRSSNewsScraper:
 
         context = await self.browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
         )
 
         self.page = await context.new_page()
         await self.page.set_extra_http_headers(
             {
                 "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                    "image/webp,*/*;q=0.8"
+                ),
             }
         )
 
@@ -248,9 +285,7 @@ class DzenRSSNewsScraper:
                 self.selectors["news_cards"]
             )
 
-            for element in story_elements[
-                :10
-            ]:  # Ограничиваем до 10 новостей на рубрику
+            for element in story_elements[:10]:  # Ограничиваем до 10 новостей на рубрику
                 try:
                     href = await element.get_attribute("href")
                     title_element = await element.query_selector(
@@ -353,7 +388,9 @@ class DzenRSSNewsScraper:
             paragraphs = []
 
             text_elements = await self.page.query_selector_all(
-                '[data-testid="article-render__block"] p span, [data-testid="article-render__block"].content--common-block__block-3U span'
+                '[data-testid="article-render__block"] p span, '
+                '[data-testid="article-render__block"].content--common-block__block-3U '
+                "span"
             )
 
             for element in text_elements:
@@ -538,9 +575,9 @@ class DzenRSSNewsScraper:
         # Метаданные канала
         ET.SubElement(channel, "title").text = "Dzen.ru - Новости"
         ET.SubElement(channel, "link").text = "https://dzen.ru/news"
-        ET.SubElement(
-            channel, "description"
-        ).text = "Новости с портала Dzen.ru по всем рубрикам"
+        ET.SubElement(channel, "description").text = (
+            "Новости с портала Dzen.ru по всем рубрикам"
+        )
         ET.SubElement(channel, "language").text = "ru-RU"
         ET.SubElement(channel, "lastBuildDate").text = datetime.now(
             timezone.utc
